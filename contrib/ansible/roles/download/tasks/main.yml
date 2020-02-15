@@ -1,38 +1,53 @@
 ---
-
-- name: Delete k3s if already present
-  file:
+- name: Check whether k3s binary is already present
+  stat:
     path: /usr/local/bin/k3s
-    state: absent
+  register: k3s
 
-- name: Download k3s binary x64
-  get_url:
-      url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/k3s
-      dest: /usr/local/bin/k3s
-      owner: root
-      group: root
-      mode: 755
-#  when: ( ansible_facts.userspace_architecture == "x86_64" )
-  when: ( ansible_facts.architecture == "x86_64" )
+- name: Determine existing k3s version
+  command: /usr/local/bin/k3s --version
+  when: k3s.stat.exists
+  register: k3s_local_version
 
-- name: Download k3s binary arm64
-  get_url:
-      url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/k3s-arm64
-      dest: /usr/local/bin/k3s
-      owner: root
-      group: root
-      mode: 755
-  when: ( ansible_facts.architecture is search("arm") )
-          and
-        ( ansible_facts.userspace_bits == "64" )
+- name: Parse existing k3s version
+  set_fact:
+    k3s_local_version: "{{ k3s_local_version.stdout.split(' ')[2] }}"
+  when: k3s.stat.exists
 
-- name: Download k3s binary armhf
+- name: Determine download url amd64
+  set_fact:
+    url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/k3s
+    checksum_url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/sha256sum-amd64.txt
+  when: ansible_facts.architecture == "x86_64"
+
+- name: Determine download url arm64
+  set_fact:
+    url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/k3s-arm64
+    checksum_url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/sha256sum-arm64.txt
+  when: ansible_facts.architecture is search("arm") and ansible_facts.userspace_bits == "64"
+
+- name: Determine download url armhf
+  set_fact:
+    url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/k3s-armhf
+    checksum_url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/sha256sum-armhf.txt
+  when: ansible_facts.architecture is search("arm") and ansible_facts.userspace_bits == "32"
+
+- set_fact:
+    download_binary: k3s_local_version is defined and k3s_version != k3s_local_version
+
+- name: Get checksum for binary
+  set_fact:
+    k3s_checksum: "{{ item.split(' ')[0] }}"
+  with_items:
+    - "{{ lookup('url', checksum_url, wantlist=True) | list }}"
+  when: 'airgap' not in item and 'k3s' in item
+
+- name: Download k3s binary
   get_url:
-      url: https://github.com/rancher/k3s/releases/download/{{ k3s_version }}/k3s-armhf
-      dest: /usr/local/bin/k3s
-      owner: root
-      group: root
-      mode: 755
-  when: ( ansible_facts.architecture is search("arm") )
-          and
-        ( ansible_facts.userspace_bits == "32" )
+    url: "{{ url }}"
+    dest: /usr/local/bin/k3s
+    checksum: "sha256:{{ k3s_checksum }}"
+    owner: root
+    group: root
+    mode: 755
+  when: download_binary
